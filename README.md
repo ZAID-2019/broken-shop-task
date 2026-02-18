@@ -1,84 +1,150 @@
 # Broken Shop - Technical Assignment
 
-This repository contains a stabilized implementation of a simplified e-commerce system built on Laravel 12.
+![PHP](https://img.shields.io/badge/PHP-8.2%2B-777BB4)
+![Laravel](https://img.shields.io/badge/Laravel-12-FF2D20)
+
+This repository contains a stabilized implementation of a simplified e-commerce flow built on Laravel (fresh install + overlay).
 
 The assignment objective is to repair and harden the core business cycle:
 
-Browse Products -> Add to Cart -> Checkout -> Async Payment -> Invoice
+**Browse Products -> Add to Cart -> Checkout -> Async Payment -> Invoice (mock)**
 
-The implementation prioritizes:
+## Table of Contents
+
+- [Requirements](#requirements)
+- [Setup Instructions](#setup-instructions)
+- [Core Cycle Status](#core-cycle-status)
+- [Architecture Decisions](#architecture-decisions)
+- [Security Notes](#security-notes)
+- [Performance Notes](#performance-notes)
+- [Scope Control (Intentionally Not Implemented)](#scope-control-intentionally-not-implemented)
+- [Manual Verification Checklist](#manual-verification-checklist)
+- [Project Structure](#project-structure)
+- [Contributing](#contributing)
+
+## Priorities
 
 - Correctness
 - Payment safety
 - Security
 - Performance
 - Defensive programming
-- Clear trade-off documentation
+- Clear trade-offs / documentation
 
-## Core Cycle Status
+## Quick Start
 
-The following flow works end-to-end:
+```bash
+cp .env.example .env
+php artisan key:generate
+php artisan migrate --seed && php artisan serve
+```
 
-1. Browse paginated products
-2. Add products to a session-based cart
-3. View cart with database-recalculated pricing
-4. Checkout with transactional order creation
-5. Async payment processing via queue worker
-6. Invoice generation after successful payment
-7. Restricted success-page access (basic IDOR mitigation)
+In another terminal:
 
+```bash
+php artisan queue:work
+```
+
+## Requirements
+
+- PHP 8.2+
+- Composer
+- SQLite or MySQL
+- Node.js + npm (not required for this assignment unless you modify frontend assets)
 ## Setup Instructions
 
-### 1) Install dependencies
+### 1. Install dependencies
 
 ```bash
 composer install
-npm install
 ```
 
-### 2) Configure environment
+Optional (only if building frontend assets):
+
+```bash
+npm install
+npm run build
+```
+
+### 2. Configure environment
 
 ```bash
 cp .env.example .env
 php artisan key:generate
 ```
 
-Set required values in `.env`:
+Required environment variables example:
 
-```dotenv
-DB_CONNECTION=sqlite
+```env
 SESSION_DRIVER=database
 QUEUE_CONNECTION=database
 ADMIN_TOKEN=your-admin-token
 ```
 
-If using SQLite, create the database file:
+### 3. Database setup
+
+SQLite (quick setup):
+
+```env
+DB_CONNECTION=sqlite
+```
 
 ```bash
 touch database/database.sqlite
+php artisan migrate --seed
 ```
 
-### 3) Run migrations and seed data
+MySQL:
+
+```env
+DB_CONNECTION=mysql
+DB_DATABASE=broken_shop
+DB_USERNAME=root
+DB_PASSWORD=
+```
 
 ```bash
 php artisan migrate --seed
 ```
 
-### 4) Run queue worker
+### 4. Run queue worker (required for async payment)
 
 ```bash
 php artisan queue:work
 ```
 
-### 5) Start application
+### 5. Start application
 
 ```bash
 php artisan serve
 ```
 
-Application URL:
+Open: `http://127.0.0.1:8000`
 
-`http://127.0.0.1:8000`
+## API Endpoints
+
+| Method | Path                        | Purpose                          | Auth            |
+| ------ | --------------------------- | -------------------------------- | --------------- |
+| GET    | `/`                         | List products                    | No              |
+| GET    | `/products/{id}`            | Product details                  | No              |
+| POST   | `/cart/add/{id}`            | Add product to session cart      | No              |
+| GET    | `/cart`                     | View cart                        | No              |
+| POST   | `/checkout`                 | Create order and dispatch charge | No              |
+| GET    | `/checkout/success/{order}` | View latest session order only   | No              |
+| GET    | `/admin`                    | Orders + tickets JSON            | `X-ADMIN-TOKEN` |
+| POST   | `/ticket`                   | Submit ticket                    | No              |
+
+## Core Cycle Status
+
+End-to-end flow works:
+
+1. Browse paginated products.
+2. Add products to a session-based cart.
+3. View cart with database-recalculated pricing.
+4. Checkout with transactional order creation.
+5. Async payment processing via queue worker.
+6. Invoice job runs only after payment is marked as paid.
+7. Success page is restricted to the latest order in the current session (session-scoped mitigation).
 
 ## Architecture Decisions
 
@@ -86,97 +152,104 @@ Application URL:
 
 - Pagination with bounded `per_page`
 - Column selection for efficiency
-- Eager loading (`vendor`) to reduce query overhead
+- Eager loading (`vendor`) to avoid N+1
 - Defensive normalization of query parameters
 
 ### Cart Design
 
-Cart is stored in session with a minimal structure:
+Cart is stored in session as:
 
-`cart = [ product_id => quantity ]`
+```text
+cart = [ product_id => quantity ]
+```
 
-Why this design:
+Why:
 
 - No Eloquent models stored in session
-- No pricing data trusted from session
-- Lower memory/serialization footprint
-- Pricing always recalculated from database
+- No session pricing trust
+- Smaller session footprint
+- Prices always recalculated from database
 
 ### Checkout Safety
 
-Checkout flow includes:
-
-- Product reload from database
-- Clean line-item snapshot (`product_id`, `unit_price`, `qty`, `line_total`)
+- Database is source of truth for prices
+- Clean line snapshot (`product_id`, `unit_price`, `qty`, `line_total`)
 - Transactional order creation
-- `DB::afterCommit()` dispatch for payment job
-- Session checkout lock to reduce duplicate submissions
-
-This preserves pricing correctness and avoids common race conditions.
+- `DB::afterCommit()` dispatch
+- Session checkout lock to reduce double-submit
 
 ### Async Payment Processing
 
-Payment is handled via `ChargePaymentJob` with:
-
-- Guard against duplicate processing (`pending -> processing` transition)
-- Bounded retry attempts
+- Guard against duplicate processing (`pending -> processing`)
+- Bounded retries
 - Progressive retry backoff
-- `PaymentAttempt` audit record creation
-- Invoice job dispatch after payment success
+- `PaymentAttempt` audit record
+- Invoice job dispatched after payment success
 
-## Security Considerations
+## Security Notes
 
-- Basic IDOR mitigation on checkout success page (latest session order only)
-- Admin endpoint protected with `X-ADMIN-TOKEN` header
-- No trust in session-held pricing
-- Ticket endpoint security considerations documented
-- Controlled retry behavior in async jobs
+- Success page restricted to latest session order (session-scoped, not full auth)
+- Admin endpoint protected via `X-ADMIN-TOKEN`
+- Pricing never trusted from session
+- Ticket endpoint documented as a potential hardening area
 
-## Performance Considerations
+## Performance Notes
 
-- Pagination for large seeded catalog (5,000 products)
-- Eager loading for vendor relationship in listing
-- Bulk `whereIn` loading for cart and checkout
-- Limited column selection on critical queries
-- Minimal session footprint
+- Pagination for large seeded catalog
+- Eager loading for vendor
+- Bulk `whereIn` loading
+- Limited column selection
+- Minimal session payload
 
-## Scope Control
+## Scope Control (Intentionally Not Implemented)
 
-The assignment does not require fixing everything. The following are intentionally left as future improvements:
-
-- Full authentication and authorization model
-- Role-based admin access controls
-- Database-level idempotency keys for checkout/payment
-- Real payment provider integration
-- Monetary precision model (decimal/minor units)
-- Stock reservation and locking
-- Persistent cart model
-- Complete automated test coverage for the core flow
-- Ticket schema/controller alignment (`tickets` migration vs controller payload)
+- Full authentication / authorization
+- Role-based admin access
+- DB-level idempotency keys
+- Real payment gateway
+- Monetary precision refactor
+- Stock locking
+- Persistent cart
+- Automated feature tests
 
 ## Manual Verification Checklist
 
-1. Visit `/` and confirm products load with pagination.
-2. Add multiple items to cart.
-3. Confirm quantity caps at 50.
-4. Visit `/cart` and verify totals reflect database pricing.
-5. Checkout once and confirm order creation.
-6. Run queue worker and confirm payment processing to `paid`.
-7. Confirm invoice job transitions order status to `invoiced`.
-8. Attempt invalid `/checkout/success/{order}` URL and verify restricted access.
-9. Access `/admin` without token and verify `403`.
-10. Access `/admin` with valid token and verify JSON response.
+1. Visit `/` and confirm products load.
+2. Add items to cart.
+3. Confirm quantity cap (50).
+4. Visit `/cart` and verify DB pricing.
+5. Checkout and confirm order creation.
+6. Run worker and confirm payment becomes `paid`.
+7. Confirm invoice job updates order to `invoiced`.
+8. Try invalid `/checkout/success/{order}` and confirm restricted behavior.
+9. Access `/admin` without token -> `403`.
+10. Access `/admin` with token -> JSON response.
 
-## Key Paths
+## Troubleshooting
 
-- `routes/web.php`
-- `app/Http/Controllers/ProductController.php`
-- `app/Http/Controllers/OrderController.php`
-- `app/Http/Controllers/AdminController.php`
-- `app/Jobs/ChargePaymentJob.php`
-- `app/Jobs/GenerateInvoiceJob.php`
-- `database/migrations/`
+- Checkout stays `pending`:
+  - Ensure `QUEUE_CONNECTION=database`
+  - Run `php artisan queue:work`
+- `/admin` returns `403`:
+  - Set `ADMIN_TOKEN` in `.env`
+  - Send header: `X-ADMIN-TOKEN: <your-token>`
+- Session/queue errors after setup:
+  - Run `php artisan migrate`
+  - Clear config cache: `php artisan config:clear`
+
+## Project Structure
+
+- `routes/web.php` - HTTP routes
+- `app/Http/Controllers/` - product, cart, checkout, and admin flow handlers
+- `app/Jobs/` - async payment and invoice jobs
+- `app/Models/` - domain models (`Order`, `Product`, `PaymentAttempt`, etc.)
+- `database/migrations/` - schema definitions
+- `resources/views/` - Blade templates
 
 ## Final Result
 
-The current implementation delivers a stable core cycle with improved payment consistency, safer checkout behavior, and explicit scope boundaries aligned with the assignment.
+A stable core cycle with improved correctness, safer checkout behavior, basic security hardening, and clear scope boundaries aligned with the assignment.
+
+## Contributing
+
+This repository is prepared as a technical assignment project. Changes should stay aligned with the assignment scope and documented trade-offs.
