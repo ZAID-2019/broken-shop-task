@@ -14,8 +14,10 @@ class GenerateInvoiceJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
+    // Retry a few times if invoice generation fails
     public $tries = 3;
 
+    // Backoff to avoid hammering workers on repeated failures
     public function backoff(): array
     {
         return [5, 15, 30];
@@ -25,19 +27,21 @@ class GenerateInvoiceJob implements ShouldQueue
 
     public function handle(): void
     {
+        // Reload order from DB
         $order = Order::query()->find($this->orderId);
-
         if (!$order) {
             return;
         }
 
-        // Only generate invoice for paid orders
+        // Never generate invoice unless payment is confirmed
         if ($order->payment_status !== 'paid') {
             return;
         }
 
+        // Use stored snapshot items (audit-friendly)
         $items = json_decode($order->items ?? '[]', true) ?: [];
 
+        // Collect product ids to bulk-load DB records (optional fallback)
         $productIds = [];
         foreach ($items as $item) {
             if (isset($item['product_id'])) {
@@ -45,12 +49,14 @@ class GenerateInvoiceJob implements ShouldQueue
             }
         }
 
+        // Bulk query to avoid N+1
         $products = Product::query()
             ->select(['id', 'name', 'price'])
             ->whereIn('id', $productIds)
             ->get()
             ->keyBy('id');
 
+        // Build invoice lines from snapshot (DB is only fallback)
         $lines = [];
         foreach ($items as $item) {
             $pid = (int) ($item['product_id'] ?? 0);
@@ -65,7 +71,7 @@ class GenerateInvoiceJob implements ShouldQueue
             ];
         }
 
-        // Pretend invoice generation (store result somewhere if needed)
+        // Mock "invoice generated" step (in real app: persist invoice/pdf)
         $order->status = 'invoiced';
         $order->save();
     }

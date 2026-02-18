@@ -11,20 +11,25 @@ class AdminController extends Controller
 {
     public function index(Request $request)
     {
+        // Read admin token from .env
         $expected = (string) env('ADMIN_TOKEN', '');
+
+        // Token must be sent in request header
         $provided = (string) $request->header('X-ADMIN-TOKEN', '');
 
+        // Block access if token invalid
         if ($expected === '' || !hash_equals($expected, $provided)) {
             abort(403);
         }
 
+        // Log access (basic audit)
         Log::info('Admin access', [
             'ip' => $request->ip(),
-            'ua' => substr((string) $request->userAgent(), 0, 120),
         ]);
 
-        $orders = Order::query()->latest()->limit(200)->get();
-        $tickets = Ticket::query()->latest()->limit(200)->get();
+        // Load latest records (limit to avoid heavy queries)
+        $orders = Order::latest()->limit(200)->get();
+        $tickets = Ticket::latest()->limit(200)->get();
 
         return response()->json([
             'orders' => $orders,

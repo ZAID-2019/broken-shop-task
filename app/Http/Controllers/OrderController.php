@@ -11,37 +11,31 @@ use Throwable;
 
 class OrderController extends Controller
 {
-    /**
-     * Session cart structure:
-     * cart = [ product_id => qty, ... ]
-     */
-
     public function addToCart(Request $request, $id)
     {
-        // 1) Ensure product exists (prevents adding null / invalid ids)
+        // Fail fast if product does not exist
         $product = Product::query()
             ->select(['id'])
             ->findOrFail((int) $id);
 
-        // 2) Load cart (or create empty)
+        // Minimal session cart: [product_id => qty]
         $cart = $request->session()->get('cart', []);
 
-        // 3) Increase qty (cap to prevent abuse / giant session payload)
+        // Increment safely (cap to prevent abuse)
         $currentQty = (int) ($cart[$product->id] ?? 0);
         $cart[$product->id] = min(50, $currentQty + 1);
 
-        // 4) Save back to session
         $request->session()->put('cart', $cart);
 
-        // Better UX: redirect to cart page
         return redirect()->route('cart.index');
     }
 
     public function cart(Request $request)
     {
+        // Session cart structure: [product_id => qty]
         $cart = $request->session()->get('cart', []);
 
-        // Always render the same view
+        // Always render same view for consistency
         if (empty($cart)) {
             return view('cart.index', [
                 'items' => [],
@@ -51,7 +45,7 @@ class OrderController extends Controller
 
         $productIds = array_keys($cart);
 
-        // Load from DB (source of truth for price + product existence)
+        // DB is source of truth (price + product existence)
         $products = Product::query()
             ->select(['id', 'name', 'sku', 'price'])
             ->whereIn('id', $productIds)
@@ -63,18 +57,13 @@ class OrderController extends Controller
 
         foreach ($cart as $productId => $qty) {
             $qty = (int) $qty;
-            if ($qty < 1) {
-                continue;
-            }
 
-            // If product removed from DB, skip safely
-            if (!isset($products[$productId])) {
+            if ($qty < 1 || !isset($products[$productId])) {
                 continue;
             }
 
             $p = $products[$productId];
             $price = (float) $p->price;
-
             $subtotal = $price * $qty;
 
             $items[] = [
@@ -94,16 +83,16 @@ class OrderController extends Controller
             'total' => $total,
         ]);
     }
-
     public function checkout(Request $request)
     {
         $cart = $request->session()->get('cart', []);
 
+        // No checkout without items
         if (empty($cart)) {
             return response()->json(['ok' => false, 'message' => 'Cart is empty'], 422);
         }
 
-        // Simple protection against double submit / retries
+        // Prevent double-submit (best-effort, session-scoped)
         if ($request->session()->get('checkout_lock') === true) {
             return response()->json(['ok' => false, 'message' => 'Checkout already in progress'], 409);
         }
@@ -112,7 +101,7 @@ class OrderController extends Controller
         try {
             $productIds = array_keys($cart);
 
-            // Load products from DB (payment safety: never trust session for prices)
+            // DB is source of truth (never trust session for prices)
             $products = Product::query()
                 ->select(['id', 'name', 'sku', 'price'])
                 ->whereIn('id', $productIds)
@@ -124,23 +113,22 @@ class OrderController extends Controller
 
             foreach ($cart as $productId => $qty) {
                 $qty = (int) $qty;
-                if ($qty < 1) {
-                    continue;
-                }
 
-                if (!isset($products[$productId])) {
-                    continue; // product deleted/not found
+                if ($qty < 1 || !isset($products[$productId])) {
+                    continue;
                 }
 
                 $p = $products[$productId];
                 $unitPrice = (float) $p->price;
+
                 $lineTotal = $unitPrice * $qty;
 
+                // Persist snapshot for audit/invoicing even if product changes later
                 $items[] = [
                     'product_id' => (int) $p->id,
                     'name' => $p->name,
                     'sku' => $p->sku,
-                    'unit_price' => $unitPrice,   // snapshot
+                    'unit_price' => $unitPrice,
                     'qty' => $qty,
                     'line_total' => $lineTotal,
                 ];
@@ -149,15 +137,13 @@ class OrderController extends Controller
             }
 
             if (empty($items)) {
-                return redirect()
-                    ->route('cart.index')
-                    ->with('error', 'Your cart is empty.');
+                return redirect()->route('cart.index')->with('error', 'Your cart is empty.');
             }
 
             DB::beginTransaction();
 
             $order = new Order();
-            // Guest flow (no auth): do NOT accept user_id from request
+            // Guest flow: never accept user_id from request
             $order->user_id = null;
 
             $order->items = json_encode($items);
@@ -166,46 +152,42 @@ class OrderController extends Controller
             $order->payment_status = 'pending';
             $order->save();
 
-            // Dispatch after commit to avoid race conditions
-            DB::afterCommit(function () use ($order) {
-                ChargePaymentJob::dispatch($order)->onQueue('default');
-            });
+            // Dispatch after commit so workers never process rolled-back orders
+            DB::afterCommit(fn() => ChargePaymentJob::dispatch($order)->onQueue('default'));
 
             DB::commit();
 
-            // Clear cart after successful order creation
             $request->session()->forget('cart');
-
             $request->session()->put('last_order_id', $order->id);
 
             return redirect()->route('checkout.success', $order->id);
-        } catch (Throwable $e) {
-            DB::rollBack();
-            throw $e;
         } finally {
-            // Always release lock
+            // Always release lock (success or failure)
             $request->session()->forget('checkout_lock');
         }
     }
 
-public function success(Request $request, Order $order)
-{
-    $lastOrderId = (int) $request->session()->get('last_order_id', 0);
+    public function success(Request $request, Order $order)
+    {
+        $lastOrderId = (int) $request->session()->get('last_order_id', 0);
 
-    if ($lastOrderId === 0) {
-        return redirect('/')
-            ->with('error', 'No recent order found for this session.');
+        if ($lastOrderId <= 0) {
+            return redirect('/')->with('error', 'Order not found.');
+        }
+
+        if ($order->id !== $lastOrderId) {
+            if (!Order::whereKey($lastOrderId)->exists()) {
+                return redirect('/')->with('error', 'Order not found.');
+            }
+
+            // redirect silently (no error)
+            return redirect()->route('checkout.success', $lastOrderId);
+        }
+
+        return view('checkout.success', [
+            'order' => $order,
+            'items' => json_decode($order->items ?? '[]', true) ?: [],
+            'title' => 'Checkout Success',
+        ]);
     }
-
-    if ($order->id !== $lastOrderId) {
-        return redirect()
-            ->route('checkout.success', $lastOrderId)
-            ->with('error', 'You can only view the latest order for this session.');
-    }
-
-    return view('checkout.success', [
-        'order' => $order,
-        'title' => 'Checkout Success',
-    ]);
-}
 }

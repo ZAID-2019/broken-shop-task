@@ -6,5 +6,13 @@ use Illuminate\Database\Eloquent\Model;
 
 class Order extends Model
 {
-    protected $guarded = [];
+    // Explicit allow-list to prevent mass assignment vulnerabilities
+    protected $fillable = [
+        'user_id',
+        'items',
+        'total',
+        'status',
+        'payment_reference',
+        'payment_status',
+    ];
 }

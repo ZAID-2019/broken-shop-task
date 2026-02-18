@@ -9,14 +9,14 @@ class TicketController extends Controller
 {
     public function store(Request $request)
     {
-        // Validate only allowed fields
+        // Validate only whitelisted fields (prevent mass assignment abuse)
         $validated = $request->validate([
             'title' => 'required|string|max:255',
             'message' => 'required|string|max:2000',
             'email' => 'nullable|email',
         ]);
 
-        // Create using only validated fields
+        // Create ticket using validated data only
         $ticket = Ticket::create($validated);
 
         return response()->json([

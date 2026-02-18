@@ -1,5 +1,6 @@
 <!doctype html>
 <html>
+
 <head>
     <meta charset="utf-8">
     <title>Cart</title>
@@ -45,7 +46,7 @@
             background: white;
             padding: 15px;
             border-radius: 6px;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
             margin-bottom: 15px;
         }
 
@@ -64,7 +65,7 @@
             padding: 15px;
             background: white;
             border-radius: 6px;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
             text-align: right;
         }
 
@@ -72,57 +73,77 @@
             background: white;
             padding: 20px;
             border-radius: 6px;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+        }
+
+        .alert {
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin: 10px 0 15px;
+            font-size: 14px;
+        }
+
+        .alert.error {
+            background: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #fecaca;
+        }
+
+        .alert.success {
+            background: #d1fae5;
+            color: #065f46;
+            border: 1px solid #a7f3d0;
         }
     </style>
 </head>
+
 <body>
 
-<h1>Your Cart</h1>
+    <h1>Your Cart</h1>
 
 
 
-{{-- Flash Messages --}}
-@if(session('error'))
+    {{-- Flash Messages --}}
+    @if(session('error'))
     <div class="alert error">
         {{ session('error') }}
     </div>
-@endif
+    @endif
 
-@if(session('success'))
+    @if(session('success'))
     <div class="alert success">
         {{ session('success') }}
     </div>
-@endif
+    @endif
 
-<div class="top-bar">
-    <a href="/" class="btn btn-secondary">← Back to Products</a>
-</div>
+    <div class="top-bar">
+        <a href="/" class="btn btn-secondary">← Back to Products</a>
+    </div>
 
-@if(empty($items))
+    @if(empty($items))
     <div class="empty">
         <p>Your cart is empty.</p>
     </div>
-@else
+    @else
 
     @foreach($items as $item)
-        <div class="card">
-            <strong>{{ $item['name'] }}</strong>
+    <div class="card">
+        <strong>{{ $item['name'] }}</strong>
 
-            <div class="meta">SKU: {{ $item['sku'] }}</div>
+        <div class="meta">SKU: {{ $item['sku'] }}</div>
 
-            <div class="meta">
-                Quantity: {{ $item['qty'] }}
-            </div>
-
-            <div class="meta">
-                Unit Price: ${{ number_format($item['price'], 2) }}
-            </div>
-
-            <div class="price">
-                Subtotal: ${{ number_format($item['subtotal'], 2) }}
-            </div>
+        <div class="meta">
+            Quantity: {{ $item['qty'] }}
         </div>
+
+        <div class="meta">
+            Unit Price: ${{ number_format($item['price'], 2) }}
+        </div>
+
+        <div class="price">
+            Subtotal: ${{ number_format($item['subtotal'], 2) }}
+        </div>
+    </div>
     @endforeach
 
     <div class="total-box">
@@ -136,7 +157,8 @@
         </form>
     </div>
 
-@endif
+    @endif
 
 </body>
+
 </html>
