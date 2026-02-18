@@ -180,8 +180,3 @@ The assignment does not require fixing everything. The following are intentional
 ## Final Result
 
 The current implementation delivers a stable core cycle with improved payment consistency, safer checkout behavior, and explicit scope boundaries aligned with the assignment.
-
-## Author
-
-Hashem Zaher Aldissi  
-Senior Backend Candidate
