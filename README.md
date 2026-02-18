@@ -129,7 +129,7 @@ Payment is handled via `ChargePaymentJob` with:
 - Basic IDOR mitigation on checkout success page (latest session order only)
 - Admin endpoint protected with `X-ADMIN-TOKEN` header
 - No trust in session-held pricing
-- Input validation in ticket submission path
+- Ticket endpoint security considerations documented
 - Controlled retry behavior in async jobs
 
 ## Performance Considerations
